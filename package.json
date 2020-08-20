@@ -1,0 +1,32 @@
+{
+  "name": "node-autocli",
+  "version": "0.1.0",
+  "description": "Generates and handles a complete CLI for your node.js program by parsing the JS Doc.",
+  "main": "autocli.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ripperdoc/autocli.git"
+  },
+  "keywords": [
+    "cli",
+    "jsdoc",
+    "node",
+    "generator"
+  ],
+  "author": "Martin Fröjd",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/ripperdoc/autocli/issues"
+  },
+  "homepage": "https://github.com/ripperdoc/autocli#readme",
+  "dependencies": {
+    "chalk": "^4.1.0",
+    "jsdoc-api": "^6.0.0",
+    "leven": "^3.1.0",
+    "minimist": "^1.2.5",
+    "nested-property": "^2.0.1"
+  }
+}
