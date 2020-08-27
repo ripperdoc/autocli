@@ -275,19 +275,27 @@ function mergeArgs(cmdParams, posArgs = [], optArgs = {}, importArgs = undefined
 }
 
 /**
- * Automatically generates a CLI for given sourcePaths with exported and documented functions.
- * Executes the command and options provided via the argv array.
+ * Automatically generates a CLI for given sourcePaths with exported and
+ * documented functions. Executes the command and options provided via the argv
+ * array.
  *
  * @param {string[]} argv array of command options from `process.argv` 
- * @param {string|string[]|object} sourcePaths path(s) of source files to scan. If an object, each key will denote a group of commands.
+ * @param {string|string[]|object} sourcePaths path(s) of source files to scan.
+ * If an object, each key will denote a group of commands.
  * @param {object} [options={}] the options object
- * @param {string} options.cliName name of the CLI app to display when printing help. Defaults to package.json values from calling package if found.
- * @param {string} options.cliDescription description of the CLI app to display when printing help. Defaults to package.json values from calling package if found.
- * @param {string} options.cliVersion version of the CLI app to display when printing help. Defaults to package.json values from calling package if found.
- * @param {object} options.minimistOpts specific options to minimist that is used to parse command arguments
- * @param {object} options.internalArgs function parameters that should not be exposed in CLI commands but instead populated internally
- * @param {boolean} [options.parallelize=true] if given multiple commands (with -j), run them in parallel
- * @returns {Promise<any[]>} a promise resolving to an array of command return values
+ * @param {string} options.cliName name of the CLI app to display when printing
+ * help. Defaults to package.json values from calling module.
+ * @param {string} options.cliDescription description of the CLI app to display
+ * when printing help. Defaults to package.json values from calling module.
+ * @param {string} options.cliVersion version of the CLI app to display when
+ * printing help. Defaults to package.json values from calling module.
+ * @param {object} options.minimistOpts specific options to minimist that is
+ * used to parse command arguments
+ * @param {object} options.internalArgs function parameters that should not be
+ * exposed in CLI commands but instead populated internally
+ * @param {boolean} [options.parallelize=true] if given multiple commands (with
+ * -j), run them in parallel
+ * @returns {Promise<any[]>} resolving to an array of command return values
  */
 async function autoCLI(argv, sourcePaths, options = {}) {
     // Find package.json of the script where main is run from, assuming autoCLI is used as a dependency to it
