@@ -6,6 +6,7 @@ const minimist = require('minimist');
 const chalk = require('chalk');
 const leven = require('leven');
 const nestedProp = require("nested-property");
+const pkgUp = require('pkg-up');
 
 /**
  * Finds the string between a balanced pair of symbols, e.g. opening and closing bracket.
@@ -150,7 +151,7 @@ function printHelp({ cmdGroup, cmd, commands, options }) {
             // Search for command with closest levenshtein distance (closest string)
             let guesses = Object.keys(commands)
                 .reduce((prev, cur) => prev.concat(
-                    Object.keys(commands[cur]).map(el => [cur, el] )), [])
+                    Object.keys(commands[cur]).map(el => [cur, el])), [])
                 .sort((a, b) => leven(a[1], search) - leven(b[1], search))
             out += chalk.red(`Did you mean '${guesses[0][0]} ${guesses[0][1]}'?\n\n`);
         }
@@ -277,23 +278,28 @@ function mergeArgs(cmdParams, posArgs = [], optArgs = {}, importArgs = undefined
  * Automatically generates a CLI for given sourcePaths with exported and documented functions.
  * Executes the command and options provided via the argv array.
  *
- * @param {string[]} argv array of command options (such as from `process.argv`) 
- * @param {string|string[]|object} sourcePaths
- * @param {object} [options={}]
- * @param {Function} options.paramCb
- * @param {string} options.cliName
- * @param {string} options.cliDescription
- * @param {string} options.cliVersion
- * @param {object} options.minimistOpts
- * @param {object} options.internalArgs
- * @returns
+ * @param {string[]} argv array of command options from `process.argv` 
+ * @param {string|string[]|object} sourcePaths path(s) of source files to scan. If an object, each key will denote a group of commands.
+ * @param {object} [options={}] the options object
+ * @param {string} options.cliName name of the CLI app to display when printing help. Defaults to package.json values from calling package if found.
+ * @param {string} options.cliDescription description of the CLI app to display when printing help. Defaults to package.json values from calling package if found.
+ * @param {string} options.cliVersion version of the CLI app to display when printing help. Defaults to package.json values from calling package if found.
+ * @param {object} options.minimistOpts specific options to minimist that is used to parse command arguments
+ * @param {object} options.internalArgs function parameters that should not be exposed in CLI commands but instead populated internally
+ * @param {boolean} [options.parallelize=true] if given multiple commands (with -j), run them in parallel
+ * @returns {Promise<any[]>} a promise resolving to an array of command return values
  */
-async function autoCLI(argv, sourcePaths, options = {}, packageObject = {}) {
-    let script, cmdGroup, cmd, result;
+async function autoCLI(argv, sourcePaths, options = {}) {
+    // Find package.json of the script where main is run from, assuming autoCLI is used as a dependency to it
+    let callingPackagePath = pkgUp.sync({ cwd: require.main.filename }), callingPackage = {};
+    callingPackage = callingPackagePath ? require(callingPackagePath) : callingPackage;
+
+    let script, cmdGroup, cmd;
     [, script, ...argv] = argv // Split argv into script name and arguments
-    options.cliName = options.cliName || packageObject.name || pathLib.basename(script);
-    options.cliDescription = options.cliDescription || packageObject.description;
-    options.cliVersion = options.cliVersion || packageObject.version;
+    options.cliName = options.cliName || callingPackage.name || pathLib.basename(script);
+    options.cliDescription = options.cliDescription || callingPackage.description;
+    options.cliVersion = options.cliVersion || callingPackage.version;
+    options.parallelize = options.parallelize === undefined ? true : options.parallelize;
 
     let cmdArgs = minimist(argv, options.minimistOpts || {});
     let commands = {};
@@ -315,15 +321,12 @@ async function autoCLI(argv, sourcePaths, options = {}, packageObject = {}) {
         printHelp({ cmdGroup, cmd, commands, options });
     } else {
         // TODO maybe re-parse argv as we can cast some options based on command param types
-        // args is an array. It can take values from internalArgs, from cmdArgs and from JSON input.
-        // as it's an array, we have to deal with the index. We might have an internalArg at index 2,
-        // but a named positional argument at index 0, or vice versa
         let jsonObj, importArgs = [undefined], results = [];
 
         // Remove all properties that are not intended for the command
         let { _, j, json, h, help, v, version, ...optArgs } = cmdArgs;
         if (jsonObj = (json || j)) {
-            jsonObj = jsonObj.match(/\.json$/) ? require(__dirname + "/../" + jsonObj) : JSON.parse(jsonObj);
+            jsonObj = jsonObj.match(/\.json$/) ? require(pathLib.join(process.cwd(), jsonObj)) : JSON.parse(jsonObj);
             if (Array.isArray(jsonObj)) {
                 // We have a batch job, each array element is one command
                 importArgs = jsonObj;
@@ -332,16 +335,14 @@ async function autoCLI(argv, sourcePaths, options = {}, packageObject = {}) {
             }
         }
 
-        for (let importArg of importArgs) {
-            let args = mergeArgs(commands[cmdGroup][cmd].params, _, optArgs, importArg, options.internalArgs);
-            // results.push(args);
-            results.push(await Promise.resolve(commands[cmdGroup][cmd].func.apply(null, Object.values(args))));
-        }
+        let mergedArgs = importArgs.map(a => mergeArgs(commands[cmdGroup][cmd].params, _, optArgs, a, options.internalArgs));
 
-        console.log(results)
-        return results;
+        if (options.parallelize) {
+            return Promise.all(mergedArgs.map(args => commands[cmdGroup][cmd].func.apply(null, Object.values(args))));
+        } else {
+            return mergedArgs.map(async args => await commands[cmdGroup][cmd].func.apply(null, Object.values(args)));
+        }
     }
-    return;
 }
 
 module.exports = { autoCLI }
