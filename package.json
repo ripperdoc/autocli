@@ -1,6 +1,6 @@
 {
   "name": "node-autocli",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Generates and handles a complete CLI for your node.js program by parsing the JS Doc.",
   "main": "autocli.js",
   "scripts": {
