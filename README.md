@@ -6,6 +6,7 @@ When building CLIs for testing and admin of my code I often found that I had to 
 
 **AutoCLI** is a small library with single function call that will generate a complete CLI for your Node.js project. It just needs to know what source files it should parse for JSDoc, and it will use that to build a model for what commands (functions) can be called, their names, description and accepted parameters. **AutoCLI only works if your source code uses proper JS Doc!**
 
+Similar to: [Python Fire](https://github.com/google/python-fire), [Python Typer](https://github.com/tiangolo/typer)
 ## How it works
 
 Using the excellent `jsdoc-api` package we can scan Javascript source files for JS Doc comments. Let's say you have this function:

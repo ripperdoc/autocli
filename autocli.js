@@ -86,6 +86,10 @@ function makeCommands(sourcePaths) {
         .reduce((obj, o) => { return { ...obj, ...require(pathLib.join(o.meta.path, o.meta.filename)) } }, {});
     // For each exported function, enhance with functionDocs
     for (let key in commands) {
+        if (!functionDocs[key]) {
+            delete commands[key]; // require() can introduce other undocumented exported variables, ignore those
+            continue;
+        }
         let desc = (functionDocs[key].description || "").replace('\n', ' ');
         if (desc.length > 120)
             desc = desc.substring(0, 120) + '...'
@@ -224,7 +228,7 @@ function mergeArgs(cmdParams, posArgs = [], optArgs = {}, importArgs = undefined
     // Filter out positional arguments and options not associated with a command
     // Create an object representing the arguments values. Note that since ES2015, order of keys are
     // chronological, meaning if we put them in at the right parameter order they will also come out in same order
-    let args = cmdParams.reduce((obj, param) => { nestedProp.set(obj, param.name, undefined); return obj }, {})
+    let args = cmdParams ? cmdParams.reduce((obj, param) => { nestedProp.set(obj, param.name, undefined); return obj }, {}) : [];
 
     // console.log("Args from start", args)
 
@@ -329,26 +333,37 @@ async function autoCLI(argv, sourcePaths, options = {}) {
         printHelp({ cmdGroup, cmd, commands, options });
     } else {
         // TODO maybe re-parse argv as we can cast some options based on command param types
-        let jsonObj, importArgs = [undefined], results = [];
+        let importObj, importArgs = [undefined], results = [];
 
         // Remove all properties that are not intended for the command
-        let { _, j, json, h, help, v, version, ...optArgs } = cmdArgs;
-        if (jsonObj = (json || j)) {
-            jsonObj = jsonObj.match(/\.json$/) ? require(pathLib.join(process.cwd(), jsonObj)) : JSON.parse(jsonObj);
-            if (Array.isArray(jsonObj)) {
+        let { _, j, json, d, data, h, help, v, version, ...optArgs } = cmdArgs;
+
+        if (importObj = (data || d)) {
+            if (importObj.match(/\.json$/))
+                importObj = require(pathLib.isAbsolute(importObj) ? importObj : pathLib.join(process.cwd(), importObj));
+            else
+                importObj = JSON.parse(importObj);
+            if (Array.isArray(importObj)) {
                 // We have a batch job, each array element is one command
-                importArgs = jsonObj;
+                importArgs = importObj;
             } else {
-                importArgs[0] = jsonObj;
+                importArgs[0] = importObj;
             }
         }
-
         let mergedArgs = importArgs.map(a => mergeArgs(commands[cmdGroup][cmd].params, _, optArgs, a, options.internalArgs));
-
+        let result;
         if (options.parallelize) {
-            return Promise.all(mergedArgs.map(args => commands[cmdGroup][cmd].func.apply(null, Object.values(args))));
+            result = await Promise.all(mergedArgs.map(args => commands[cmdGroup][cmd].func.apply(null, Object.values(args))));
         } else {
-            return mergedArgs.map(async args => await commands[cmdGroup][cmd].func.apply(null, Object.values(args)));
+            result = [];
+            for (let args of mergedArgs) {
+                result.push(await commands[cmdGroup][cmd].func.apply(null, Object.values(args)));
+            }
+        }
+        if (j || json) {
+            return [JSON.stringify(result)];
+        } else {
+            return result;
         }
     }
 }
