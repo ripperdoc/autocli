@@ -23,11 +23,11 @@
   },
   "homepage": "https://github.com/ripperdoc/autocli#readme",
   "dependencies": {
-    "chalk": "^4.1.0",
-    "jsdoc-api": "^6.0.0",
+    "chalk": "^4.1.2",
+    "jsdoc-api": "^7.1.0",
     "leven": "^3.1.0",
     "minimist": "^1.2.5",
-    "nested-property": "^2.0.1",
+    "nested-property": "^4.0.0",
     "pkg-up": "^3.1.0"
   }
 }

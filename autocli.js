@@ -78,7 +78,7 @@ function parseFunction(func) {
  * @returns {object} a map of command objects, keyed by command (function) name
  */
 function makeCommands(sourcePaths) {
-    let functionDocs = jsdoc.explainSync({ files: sourcePaths })
+    let functionDocs = jsdoc.explainSync({ files: sourcePaths, cache: true })
         .filter(o => o.kind === 'function')
         .reduce((obj, o) => { obj[o.name] = o; return obj; }, {});
     // Require (import) all source files found to a map of (exported) functions
@@ -112,8 +112,8 @@ function makeCommands(sourcePaths) {
  * @returns {string} a help text
  */
 function helpString(command, ignoreParams, showParams = false) {
-    let fill = showParams ? '' : '.'.repeat(24 - command.name.length);
-    let s = `${chalk.blueBright(command.name)}${fill}`;
+    let fill = showParams || command.name.length >= 24 ? '' : '.'.repeat(24 - command.name.length);
+    let s = `${chalk.blueBright(command.name.length >= 24 ? command.name.substring(0, 24) : command.name)}${fill}`;
     if (showParams && command.params)
         s += " " + command.params
             .filter(p => ignoreParams.indexOf(p.name) < 0)
@@ -130,7 +130,7 @@ function helpString(command, ignoreParams, showParams = false) {
             .join(' ') + '\n\n';
 
     if (command.description)
-        s += ` ${command.description}`;
+        s += ` ${command.description.replace(/ ?\n ?/, " ")}`;
 
     s += '\n';
     return s;
