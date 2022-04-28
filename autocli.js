@@ -357,7 +357,12 @@ async function autoCLI(argv, sourcePaths, options = {}) {
         } else {
             result = [];
             for (let args of mergedArgs) {
-                result.push(await commands[cmdGroup][cmd].func.apply(null, Object.values(args)));
+                try {
+                    result.push(await commands[cmdGroup][cmd].func.apply(null, Object.values(args)));
+                } catch (e)
+                {
+                    result.push(e.toString());
+                }
             }
         }
         if (j || json) {
