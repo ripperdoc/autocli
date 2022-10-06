@@ -41,6 +41,7 @@ function findBalancedPair(s, startSymbol, endSymbol) {
 
 /**
  * Attempts to return details about a function, like params, by parsing the function signature.
+ * Only to be used as fallback if a function lacks JSDoc.
  *
  * @param {Function} func
  */
@@ -310,7 +311,7 @@ async function autoCLI(argv, sourcePaths, options = {}) {
     [, script, ...argv] = argv // Split argv into script name and arguments
     options.cliName = options.cliName || callingPackage.name || pathLib.basename(script);
     options.cliDescription = options.cliDescription || callingPackage.description;
-    options.cliVersion = options.cliVersion || callingPackage.version;
+    options.cliVersion = options.cliVersion || callingPackage.version || "Unversioned";
     options.parallelize = options.parallelize === undefined ? true : options.parallelize;
 
     let cmdArgs = minimist(argv, options.minimistOpts || {});
@@ -336,9 +337,9 @@ async function autoCLI(argv, sourcePaths, options = {}) {
         let importObj, importArgs = [undefined], results = [];
 
         // Remove all properties that are not intended for the command
-        let { _, j, json, d, data, h, help, v, version, ...optArgs } = cmdArgs;
+        let { _, j, json, h, help, v, version, ...optArgs } = cmdArgs;
 
-        if (importObj = (data || d)) {
+        if (importObj = (json || j)) {
             if (importObj.match(/\.json$/))
                 importObj = require(pathLib.isAbsolute(importObj) ? importObj : pathLib.join(process.cwd(), importObj));
             else
