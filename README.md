@@ -43,25 +43,28 @@ If you call `node index.js adder <a> <b>` it will run the function and output th
 - Can handle a flat list of commands or commands nested into command groups
 - Tries to guess which command the user intended if it can't find what was typed
 - Can be provided an object of internal arguments that will be populated in code and not exposed to CLI users, so that you don't need to maintain different versions of your function
-- Can take arguments as JSON encoded text or path to a JSON file
+- Can take arguments as JSON encoded text or path to a JSON file with `-d/--data`, and output results as JSON with `-j/--json`
 - If provided JSON is an array, it will run the command for each element, so it becomes a simple batch runner for commands
 - Converts command line arguments to the types declared in the JS Doc, and rejects values that don't fit (see below)
 
 ## Argument types
 
-Values given on the command line (positional or `--option`) are cast based on the `@param` type. Values imported with `-j` are used as is.
+Values given on the command line (positional or `--option`) are cast based on the `@param` type. Values imported with `-d` are used as is.
 
 | Type | Accepted values |
 |---|---|
-| `boolean` | `true`/`false` (any case), `--flag` for true and `--no-flag` for false |
+| `boolean` | `true`/`false` (any case), `--flag` for true and `--no-flag` for false. A flag never takes the next argument as its value, unless it is `true` or `false` |
 | `number` | Any number, e.g. `5`, `-1.5` |
 | `string` | Kept as given, also when it looks like a number, e.g. `0123` |
 | `"a"\|"b"` | One of the listed values |
-| `string[]`, `Array<T>` | Comma-separated list, e.g. `a,b`, or a JSON array. Elements are cast to `T` |
-| `object` and other types | JSON if the value starts with `{` or `[`, otherwise passed on as a string |
+| `string[]`, `Array<T>` | Comma-separated list, e.g. `a,b`, a JSON array, or the option repeated. Elements are cast to `T` |
+| `?T` | Also `null` |
+| `object` and other types | JSON if the value starts with `{` or `[`, otherwise passed on as a string. Dotted options like `--query.limit=5` give an object, with values cast like untyped ones |
 | untyped, `*` | Numbers are cast, everything else is kept as a string |
 
-Unions try `boolean`, then `number`, then `string`, so `{boolean|string}` gives `true` for `true` and the string otherwise. Options that leave out a value keep the function's default, e.g. `commit` stays `true` for `@param {boolean} [opts.commit=true]` unless given. Unknown options are reported with a warning and ignored.
+Unions try `boolean`, then `number`, then `string`, so `{boolean|string}` gives `true` for `true` and the string otherwise. Options that leave out a value keep the function's default, e.g. `commit` stays `true` for `@param {boolean} [opts.commit=true]` unless given. Unknown options are reported with a warning and ignored. Options without a value (`--limit`) or repeated (`--limit=1 --limit=2`) are rejected unless the type allows it. Negative numbers like `-5` are values, not flags; use `--` before positionals that start with `--`.
+
+Comments are found with [`acorn`](https://github.com/acornjs/acorn), so a JS Doc block documents the declaration on the first code line after it, skipping other comments. Every name assigned on that line, like `exports.a = exports.b = ...`, gets the same docs. Blocks with `@typedef`, `@callback` or `@type` are not command docs.
 
 
 ## Planned features
@@ -99,7 +102,8 @@ Node.js 20.12 or later.
  * @param {object} options.internalArgs function parameters that should not be
  * exposed in CLI commands but instead populated internally
  * @param {boolean} [options.parallelize=true] if given multiple commands (with
- * -j), run them in parallel
+ * -d), run them in parallel. If false, they run in sequence, and a failing command gives its
+ * error message as result instead of stopping the others
  * @returns {Promise<any[]>} resolving to an array of command return values
  */
 ```

@@ -1,11 +1,16 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { castValue, parseType, isStringType } = require('../lib/cast');
+const { castValue, parseType, isBooleanType } = require('../lib/cast');
 
 test('parseType splits unions at the top level only', () => {
-    assert.deepEqual(parseType('?string|Array<string|number>='), ['string', 'Array<string|number>']);
+    assert.deepEqual(parseType('string|Array<string|number>='), ['string', 'Array<string|number>']);
     assert.deepEqual(parseType('(a: string) => void'), ['(a: string) => void']);
     assert.deepEqual(parseType(''), []);
+});
+
+test('nullable types accept null', () => {
+    assert.deepEqual(parseType('?number'), ['number', 'null']);
+    assert.equal(castValue('null', '?number'), null);
 });
 
 test('booleans are cast from true/false strings', () => {
@@ -19,6 +24,7 @@ test('numbers are cast, and invalid numbers rejected', () => {
     assert.equal(castValue('42', 'number'), 42);
     assert.equal(castValue('-1.5', 'number'), -1.5);
     assert.throws(() => castValue('abc', 'number'), /Invalid value/);
+    assert.throws(() => castValue('', 'number'), /Invalid value/);
 });
 
 test('strings stay strings, even when they look like numbers or booleans', () => {
@@ -33,10 +39,22 @@ test('unions prefer boolean, then number, then string', () => {
     assert.equal(castValue('a,b', 'string|Array<string>'), 'a,b');
 });
 
-test('arrays are split on commas or parsed as JSON', () => {
+test('arrays are split on commas or parsed as JSON, casting elements', () => {
     assert.deepEqual(castValue('a, b,c', 'string[]'), ['a', 'b', 'c']);
+    assert.deepEqual(castValue('0123', 'string[]'), ['0123']);
     assert.deepEqual(castValue('1,2', 'Array<number>'), [1, 2]);
     assert.deepEqual(castValue('["a b", "c"]', 'Array.<string>'), ['a b', 'c']);
+    assert.throws(() => castValue('["a"]', 'number[]'), /Invalid value 'a'/);
+});
+
+test('repeated options are accepted for arrays only', () => {
+    assert.deepEqual(castValue(['a', 'b,c'], 'string[]'), ['a', 'b', 'c']);
+    assert.throws(() => castValue(['1', '2'], 'number', 'count'), /Multiple values for count/);
+});
+
+test('flags without value are rejected for non-boolean types', () => {
+    assert.throws(() => castValue(true, 'number', 'count'), /Missing value for count/);
+    assert.throws(() => castValue(false, 'string', 'name'), /Missing value for name/);
 });
 
 test('string literal unions are validated', () => {
@@ -50,18 +68,24 @@ test('objects are parsed from JSON, other strings passed on', () => {
     assert.throws(() => castValue('{bad', 'object', 'query'), /Invalid JSON for query/);
 });
 
-test('untyped and unknown types keep the legacy number casting', () => {
+test('dotted options cast their leaves like untyped values', () => {
+    assert.deepEqual(castValue({ limitToFirst: '5', equalTo: 'abc' }, 'object'), { limitToFirst: 5, equalTo: 'abc' });
+});
+
+test('untyped values cast numbers, as minimist did', () => {
     assert.equal(castValue('12', '*'), 12);
     assert.equal(castValue('12', undefined), 12);
     assert.equal(castValue('abc', '*'), 'abc');
-    assert.equal(castValue('x', "import('x').Foo"), 'x');
 });
 
-test('isStringType tells which options to keep as strings', () => {
-    assert.equal(isStringType('string'), true);
-    assert.equal(isStringType('string|Array<string>'), true);
-    assert.equal(isStringType('"a"|"b"'), true);
-    assert.equal(isStringType('boolean|string'), false);
-    assert.equal(isStringType('number'), false);
-    assert.equal(isStringType('*'), false);
+test('unknown types pass strings on unchanged', () => {
+    assert.equal(castValue('12', "import('x').Foo"), '12');
+    assert.equal(castValue('x', 'Config'), 'x');
+});
+
+test('isBooleanType tells which flags never take a value', () => {
+    assert.equal(isBooleanType('boolean'), true);
+    assert.equal(isBooleanType('boolean|string'), true);
+    assert.equal(isBooleanType('string'), false);
+    assert.equal(isBooleanType(undefined), false);
 });

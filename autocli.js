@@ -3,15 +3,16 @@
 const fs = require('fs');
 const pathLib = require('path');
 const { styleText } = require('util');
-const minimist = require('minimist');
 const { makeCommands } = require('./lib/docs');
-const { castValue, isStringType } = require('./lib/cast');
+const { castValue, isBooleanType } = require('./lib/cast');
+const { parseArgv } = require('./lib/argv');
 
 /** @typedef {import('./lib/docs').Command} Command */
 /** @typedef {import('./lib/docs').Param} Param */
 
 // Options handled by AutoCLI itself, never passed on to commands
-const RESERVED_OPTIONS = ['_', 'j', 'json', 'h', 'help', 'v', 'version'];
+const RESERVED_OPTIONS = ['d', 'data', 'j', 'json', 'h', 'help', 'v', 'version'];
+const RESERVED_VALUE_OPTIONS = ['d', 'data'];
 // Parameter names for an options object, whose properties are given as --option=value
 const OPTIONS_PARAMS = ['opts', 'options'];
 
@@ -133,16 +134,18 @@ function printHelp({ cmdGroup, cmd, commands, options }) {
             if (guesses.length)
                 out += styleText('red', `Did you mean '${guesses[0][0]} ${guesses[0][1]}'?\n\n`);
         }
-        out += `Usage: ${options.cliName}` + ' GROUP COMMAND [ARGUMENTS]\n\n';
+        const flat = Object.keys(commands).length === 1 && commands.all;
+        out += `Usage: ${options.cliName}${flat ? '' : ' GROUP'} COMMAND [ARGUMENTS]\n\n`;
         if (options.cliDescription)
             out += `${options.cliDescription}\n\n`;
         out +=
             'Options:\n' +
             '  -h, --help               Print help text for all commands or specific command\n' +
-            '  -j, --json <string|file> Import JSON string or file with argument object or array of such objects\n' +
+            '  -d, --data <string|file> Import JSON string or file with argument object or array of such objects\n' +
+            '  -j, --json               Output the result as JSON\n' +
             '  -v, --version            Print version information and quit\n\n';
         for (let group of Object.keys(commands).sort()) {
-            out += `\nGROUP: ${group}\n\n`;
+            out += flat ? '\n' : `\nGROUP: ${group}\n\n`;
             out += Object.values(commands[group])
                 .sort((a, b) => a.name.localeCompare(b.name))
                 .reduce((s, cmd) => s + "  " + helpString(cmd, ignoreParams), "");
@@ -174,7 +177,7 @@ function mergeDeep(target, source) {
         const sourceValue = source[key];
 
         if (!Object.hasOwn(target, key)) {
-            console.log(`Skipping key ${key} not in`, target);
+            console.warn(styleText('yellow', `Ignoring unknown argument ${key} in imported data`));
             return;  // Skip if source doesn't have key
         } else if (Array.isArray(targetValue) && Array.isArray(sourceValue)) {
             target[key] = targetValue.concat(sourceValue);
@@ -246,18 +249,20 @@ function mergeArgs(cmdParams, posArgs = [], optArgs = {}, importArgs = undefined
 }
 
 /**
- * Options to minimist that keep values for string params as strings, so that e.g. `--id=0123`
- * is not converted to the number 123. Other values are cast based on the JSDoc type.
+ * Makes a function telling if an option takes a value, e.g. `--name x`, rather than being a
+ * boolean flag, so that flags never swallow the positional argument that follows them.
  *
- * NOTE: Boolean params are deliberately not passed as minimist `boolean` options, as minimist
- * would then set every boolean left off the command line to false, overriding function defaults.
- *
- * @param {Param[]} [params=[]]
- * @returns {import('minimist').Opts}
+ * @param {Param[]} [params] params of the command, if known
+ * @returns {(key: string) => boolean}
  */
-function argvOptions(params = []) {
-    return {
-        string: ['_', ...params.filter(p => isStringType(p.type)).map(p => optionName(p.name))],
+function optionTakesValue(params) {
+    return (key) => {
+        if (RESERVED_OPTIONS.includes(key))
+            return RESERVED_VALUE_OPTIONS.includes(key);
+        if (!params)
+            return false; // Before the command is known, only reserved options can take values
+        const param = params.find(p => optionName(p.name) === key);
+        return !param || !isBooleanType(param.type);
     };
 }
 
@@ -279,7 +284,8 @@ function argvOptions(params = []) {
  * @param {object} [options.internalArgs] function parameters that should not be
  * exposed in CLI commands but instead populated internally
  * @param {boolean} [options.parallelize=true] if given multiple commands (with
- * -j), run them in parallel
+ * -d), run them in parallel. If false, they run in sequence, and a failing command gives its
+ * error message as result instead of stopping the others
  * @returns {Promise<any[]|undefined>} resolving to an array of command return values
  */
 async function autoCLI(argv, sourcePaths, options = {}) {
@@ -294,48 +300,48 @@ async function autoCLI(argv, sourcePaths, options = {}) {
     options.parallelize = options.parallelize === undefined ? true : options.parallelize;
 
     // First pass finds the command, second pass parses its arguments based on the command's params
-    let cmdArgs = minimist(argv, { string: ['_'] });
+    let { positionals, options: cmdOptions } = parseArgv(argv, optionTakesValue());
     let commands = {};
     if (typeof sourcePaths === 'object' && !Array.isArray(sourcePaths)) {
         // Expect a command group before command
-        cmdGroup = cmdArgs._.shift();
-        cmd = cmdArgs._.shift();
+        cmdGroup = positionals.shift();
+        cmd = positionals.shift();
         for (let key in sourcePaths) {
             commands[key] = makeCommands(sourcePaths[key]);
         }
     } else {
         cmdGroup = "all";
-        cmd = cmdArgs._.shift();
+        cmd = positionals.shift();
         commands = { all: makeCommands(sourcePaths) };
     }
-    if (cmdArgs.v || cmdArgs.version) {
+    if (cmdOptions.v || cmdOptions.version) {
         console.log(options.cliVersion);
-    } else if (cmdArgs.h || cmdArgs.help || !commands[cmdGroup] || !commands[cmdGroup][cmd]) {
+    } else if (cmdOptions.h || cmdOptions.help || !commands[cmdGroup] || !commands[cmdGroup][cmd]) {
         printHelp({ cmdGroup, cmd, commands, options });
     } else {
         const command = commands[cmdGroup][cmd];
-        cmdArgs = minimist(argv, argvOptions(command.params));
-        cmdArgs._.splice(0, cmdGroup === "all" ? 1 : 2); // Remove group and command
+        ({ positionals, options: cmdOptions } = parseArgv(argv, optionTakesValue(command.params)));
+        positionals.splice(0, cmdGroup === "all" ? 1 : 2); // Remove group and command
         let importObj, importArgs = [undefined];
 
         // Remove all properties that are not intended for the command
-        let { _, j, json } = cmdArgs;
-        const optArgs = Object.fromEntries(Object.entries(cmdArgs).filter(([key]) => !RESERVED_OPTIONS.includes(key)));
+        const { j, json, d, data } = cmdOptions;
+        const optArgs = Object.fromEntries(Object.entries(cmdOptions).filter(([key]) => !RESERVED_OPTIONS.includes(key)));
 
-        if (importObj = (json || j)) {
+        if (importObj = (data || d)) {
+            if (typeof importObj !== 'string')
+                throw new Error('Option --data requires a JSON string or path to a .json file');
             if (importObj.match(/\.json$/))
                 importObj = require(pathLib.isAbsolute(importObj) ? importObj : pathLib.join(process.cwd(), importObj));
             else
                 importObj = JSON.parse(importObj);
-            if (Array.isArray(importObj)) {
-                // We have a batch job, each array element is one command
-                importArgs = importObj;
-            } else {
-                importArgs[0] = importObj;
-            }
+            // An array is a batch job, each element is the arguments of one command
+            importArgs = [].concat(importObj);
+            if (!importArgs.length || importArgs.some(a => typeof a !== 'object' || a === null || Array.isArray(a)))
+                throw new Error('Option --data must be a JSON object, or an array of objects for a batch');
         }
         // Merging also validates all arguments, before any command runs
-        let mergedArgs = importArgs.map(a => mergeArgs(command.params, _, optArgs, a, options.internalArgs));
+        let mergedArgs = importArgs.map(a => mergeArgs(command.params, positionals, optArgs, a, options.internalArgs));
         let result;
         if (options.parallelize) {
             result = await Promise.all(mergedArgs.map(args => command.func.apply(null, Object.values(args))));
@@ -358,4 +364,4 @@ async function autoCLI(argv, sourcePaths, options = {}) {
     }
 }
 
-module.exports = { autoCLI, makeCommands, mergeArgs, argvOptions };
+module.exports = { autoCLI, makeCommands, mergeArgs };

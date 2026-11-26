@@ -27,6 +27,24 @@ async function modernTypes(thing, counts, dryRun) {
 }
 
 /**
+ * Takes its options as `options` rather than `opts`.
+ * @param {number} amount
+ * @param {object} [options]
+ * @param {string} [options.label]
+ */
+exports.withOptions = (amount, { label } = {}) => ({ amount, label });
+
+/**
+ * Fails for negative values.
+ * @param {number} value
+ */
+exports.failNegative = async (value) => {
+    if (value < 0)
+        throw new Error('Negative value');
+    return value;
+};
+
+/**
  * @param {*} value
  */
 exports.untyped = (value) => value;

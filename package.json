@@ -30,7 +30,7 @@
     "lib"
   ],
   "dependencies": {
-    "comment-parser": "^1.4.10",
-    "minimist": "^1.2.8"
+    "acorn": "^8.19.0",
+    "comment-parser": "^1.4.10"
   }
 }
