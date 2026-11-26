@@ -72,11 +72,22 @@ test('unknown options are ignored with a warning', async (t) => {
     assert.match(warn, /Ignoring unknown option --comit/);
 });
 
-test('-d imports arguments without casting them, and internal args override them', async () => {
-    const [result] = await runAll('things copyThing -d {"internal":"x","id":"a","opts":{"limit":"5"}}');
+test('-d imports arguments, and internal args override them', async () => {
+    const [result] = await runAll('things copyThing -d {"internal":"x","id":"a"}');
     assert.equal(result.internal, 'injected');
     assert.equal(result.id, 'a');
-    assert.equal(result.limit, '5');
+});
+
+test('-d casts imported strings by type, like command line values', async () => {
+    const [result] = await runAll('things copyThing -d {"id":"0123","opts":{"commit":"false","limit":"5","tags":"a,b"}}');
+    assert.deepEqual([result.id, result.commit, result.limit, result.tags], ['0123', false, 5, ['a', 'b']]);
+    await assert.rejects(runAll('things copyThing -d {"opts":{"commit":"no"}}'), /Invalid value 'no' for opts.commit/);
+});
+
+test('-d keeps typed JSON values and untyped strings as given', async () => {
+    const [result] = await runAll('things copyThing -d {"opts":{"commit":false,"tags":["a,b"]}}');
+    assert.deepEqual([result.commit, result.tags], [false, ['a,b']]);
+    assert.deepEqual(await runAll('things untyped -d {"value":"0123"}'), ['0123']);
 });
 
 test('-d with a JSON array runs the command once per element', async () => {

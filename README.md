@@ -49,7 +49,7 @@ If you call `node index.js adder <a> <b>` it will run the function and output th
 
 ## Argument types
 
-Values given on the command line (positional or `--option`) are cast based on the `@param` type. Values imported with `-d` are used as is.
+Values given on the command line (positional or `--option`) are cast based on the `@param` type. Strings imported with `-d` are cast the same way, so `"commit": "false"` gives `false`, while other JSON values and strings for untyped params are used as given.
 
 | Type | Accepted values |
 |---|---|

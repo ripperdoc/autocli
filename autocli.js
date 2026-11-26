@@ -4,7 +4,7 @@ const fs = require('fs');
 const pathLib = require('path');
 const { styleText } = require('util');
 const { makeCommands } = require('./lib/docs');
-const { castValue, isBooleanType } = require('./lib/cast');
+const { castValue, isBooleanType, isAnyType, parseType } = require('./lib/cast');
 const { parseArgv } = require('./lib/argv');
 
 /** @typedef {import('./lib/docs').Command} Command */
@@ -66,6 +66,17 @@ function setNested(obj, path, value) {
         obj = obj[key];
     }
     obj[last] = value;
+}
+
+/**
+ * Gets a value at a dot-separated path, or undefined if any part is missing.
+ *
+ * @param {object} obj
+ * @param {string} path e.g. `opts.commit`
+ * @returns {any}
+ */
+function getNested(obj, path) {
+    return path.split('.').reduce((o, key) => (o && typeof o === 'object' ? o[key] : undefined), obj);
 }
 
 /**
@@ -212,9 +223,15 @@ function mergeArgs(cmdParams, posArgs = [], optArgs = {}, importArgs = undefined
         setNested(args, param.name, undefined);
     const typeOf = (/** @type {string} */ name) => cmdParams?.find(p => p.name === name)?.type;
 
-    // First do imported args, e.g. from a JSON or similar
+    // First do imported args, e.g. from a JSON or similar. Their strings are cast like command line
+    // values, so that e.g. "commit": "false" isn't truthy, but untyped values are kept as given
     if (importArgs) {
         args = mergeDeep(args, importArgs);
+        for (const param of cmdParams || []) {
+            const value = getNested(args, param.name);
+            if (typeof value === 'string' && parseType(param.type).length && !isAnyType(param.type))
+                setNested(args, param.name, castValue(value, param.type, param.name));
+        }
     }
 
     // Set arg values from internalArgs, replacing anything imported
