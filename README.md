@@ -9,7 +9,7 @@ When building CLIs for testing and admin of my code I often found that I had to 
 Similar to: [Python Fire](https://github.com/google/python-fire), [Python Typer](https://github.com/tiangolo/typer)
 ## How it works
 
-Using the excellent `jsdoc-api` package we can scan Javascript source files for JS Doc comments. Let's say you have this function:
+Using [`comment-parser`](https://github.com/syavorsky/comment-parser) we scan Javascript source files for JS Doc comments, and each exported function with a JS Doc block becomes a command. Type expressions are read as plain text, so TypeScript-style types such as `import('./x').Foo` or `{[key: string]: number}` don't break parsing. Let's say you have this function:
 
 ```js
 // math.js
@@ -45,11 +45,27 @@ If you call `node index.js adder <a> <b>` it will run the function and output th
 - Can be provided an object of internal arguments that will be populated in code and not exposed to CLI users, so that you don't need to maintain different versions of your function
 - Can take arguments as JSON encoded text or path to a JSON file
 - If provided JSON is an array, it will run the command for each element, so it becomes a simple batch runner for commands
+- Converts command line arguments to the types declared in the JS Doc, and rejects values that don't fit (see below)
+
+## Argument types
+
+Values given on the command line (positional or `--option`) are cast based on the `@param` type. Values imported with `-j` are used as is.
+
+| Type | Accepted values |
+|---|---|
+| `boolean` | `true`/`false` (any case), `--flag` for true and `--no-flag` for false |
+| `number` | Any number, e.g. `5`, `-1.5` |
+| `string` | Kept as given, also when it looks like a number, e.g. `0123` |
+| `"a"\|"b"` | One of the listed values |
+| `string[]`, `Array<T>` | Comma-separated list, e.g. `a,b`, or a JSON array. Elements are cast to `T` |
+| `object` and other types | JSON if the value starts with `{` or `[`, otherwise passed on as a string |
+| untyped, `*` | Numbers are cast, everything else is kept as a string |
+
+Unions try `boolean`, then `number`, then `string`, so `{boolean|string}` gives `true` for `true` and the string otherwise. Options that leave out a value keep the function's default, e.g. `commit` stays `true` for `@param {boolean} [opts.commit=true]` unless given. Unknown options are reported with a warning and ignored.
 
 
 ## Planned features
 
-- Automatically convert input arguments to correct type using JS Dcc parameter types
 - Better error messages for improper JS Doc
 - Fall back on parsing function signatures if no JS Doc available
 - JSON from stdin
@@ -57,6 +73,10 @@ If you call `node index.js adder <a> <b>` it will run the function and output th
 - Utilize environment variables
 - Correctly return exit codes
 - BASH completions
+
+## Requirements
+
+Node.js 20.12 or later.
 
 ## Documentation
 
@@ -76,8 +96,6 @@ If you call `node index.js adder <a> <b>` it will run the function and output th
  * when printing help. Defaults to package.json values from calling module.
  * @param {string} options.cliVersion version of the CLI app to display when
  * printing help. Defaults to package.json values from calling module.
- * @param {object} options.minimistOpts specific options to minimist that is
- * used to parse command arguments
  * @param {object} options.internalArgs function parameters that should not be
  * exposed in CLI commands but instead populated internally
  * @param {boolean} [options.parallelize=true] if given multiple commands (with

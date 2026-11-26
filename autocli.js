@@ -1,127 +1,101 @@
 //@ts-check
 
-const jsdoc = require('jsdoc-api');
+const fs = require('fs');
 const pathLib = require('path');
+const { styleText } = require('util');
 const minimist = require('minimist');
-const chalk = require('chalk');
-const leven = require('leven');
-const nestedProp = require("nested-property");
-const pkgUp = require('pkg-up');
+const { makeCommands } = require('./lib/docs');
+const { castValue, isStringType } = require('./lib/cast');
+
+/** @typedef {import('./lib/docs').Command} Command */
+/** @typedef {import('./lib/docs').Param} Param */
+
+// Options handled by AutoCLI itself, never passed on to commands
+const RESERVED_OPTIONS = ['_', 'j', 'json', 'h', 'help', 'v', 'version'];
+// Parameter names for an options object, whose properties are given as --option=value
+const OPTIONS_PARAMS = ['opts', 'options'];
 
 /**
- * Finds the string between a balanced pair of symbols, e.g. opening and closing bracket.
+ * Finds the nearest package.json walking up from a directory.
  *
- * @param {string} s
- * @param {string} startSymbol
- * @param {string} endSymbol
+ * @param {string} dir
+ * @returns {object} the parsed package.json, or an empty object if none found
+ */
+function findPackage(dir) {
+    for (let d = dir; ; d = pathLib.dirname(d)) {
+        const path = pathLib.join(d, 'package.json');
+        if (fs.existsSync(path))
+            return JSON.parse(fs.readFileSync(path, 'utf8'));
+        if (d === pathLib.dirname(d))
+            return {};
+    }
+}
+
+/**
+ * Levenshtein distance between two strings, used to suggest the closest command.
+ *
+ * @param {string} a
+ * @param {string} b
+ * @returns {number}
+ */
+function distance(a, b) {
+    let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+    for (let i = 1; i <= a.length; i++) {
+        const cur = [i];
+        for (let j = 1; j <= b.length; j++)
+            cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+        prev = cur;
+    }
+    return prev[b.length];
+}
+
+/**
+ * Sets a value at a dot-separated path, creating objects along the way.
+ *
+ * @param {object} obj
+ * @param {string} path e.g. `opts.commit`
+ * @param {any} value
+ */
+function setNested(obj, path, value) {
+    const keys = path.split('.');
+    const last = keys.pop() || '';
+    for (const key of keys) {
+        if (typeof obj[key] !== 'object' || obj[key] === null)
+            obj[key] = {};
+        obj = obj[key];
+    }
+    obj[last] = value;
+}
+
+/**
+ * The name of a parameter as given in an `--option`, e.g. `opts.commit` becomes `commit`.
+ *
+ * @param {string} paramName
  * @returns {string}
  */
-function findBalancedPair(s, startSymbol, endSymbol) {
-    let start = s.indexOf(startSymbol), pos = start, openSymbols = 1, cur;
-    if (start === -1)
-        return ""
-    // console.log(`Opened at ${pos}`);
-    while (openSymbols > 0 && pos < s.length) {
-        pos++;
-        cur = s.substring(pos, pos + 1);
-        if (cur === startSymbol) {
-            openSymbols++;
-            // console.log(`Opened at ${pos}`);
-        } else if (cur === endSymbol) {
-            openSymbols--;
-            // console.log(`Closed at ${pos}`);
-        }
-    }
-    if (openSymbols > 0) {
-        // console.error(`Did not find closing ${endSymbol} from ${startSymbol} at ${start}`);
-        throw Error(`Did not find closing ${endSymbol} from ${startSymbol} at ${start}`);
-    }
-    return s.substring(start + 1, pos - 1);
-}
-
-/**
- * Attempts to return details about a function, like params, by parsing the function signature.
- * Only to be used as fallback if a function lacks JSDoc.
- *
- * @param {Function} func
- */
-function parseFunction(func) {
-    let s;
-    if (typeof func === 'string') {
-        s = func
-    } else {
-        s = func.toString();
-    }
-    s = findBalancedPair(s, "(", ")"); // function x(...) or (...) =>
-    // s = s.replace(/\/\*.*\*\//g, '') // Remove inline comments
-    // Parameters may look like
-    // '' <- no params
-    // 'a' <- just one param
-    // 'a, b, c' <- comma-separated params, any kind of whitespace in between
-    // 'a = 1, b = 2' <- default values
-    // 'a, {b, c = 1} <- destructured object
-    // 'a, {b, {c = 1}, d = 2}' <- nested destructured object
-    // '
-    if (s) {
-        let argsToDefine = s.split(/[,{}]+/).map(arg => arg.trim()).filter(arg => arg && arg.indexOf("=") === -1);
-        let toEval = argsToDefine.length > 0 ? `var ${argsToDefine};` : '';
-        toEval += `var outputArgs = [${s}]`;
-        console.log(toEval);
-        eval(toEval);
-    }
-}
-
-/**
- * Makes a map of commands based on source files paths to scan. It will scan for all
- * functions with valid JSDoc and that also are exported.
- *
- * @param {array} sourcePaths
- * @returns {object} a map of command objects, keyed by command (function) name
- */
-function makeCommands(sourcePaths) {
-    let functionDocs = jsdoc.explainSync({ files: sourcePaths, cache: true })
-        .filter(o => o.kind === 'function')
-        .reduce((obj, o) => { obj[o.name] = o; return obj; }, {});
-    // Require (import) all source files found to a map of (exported) functions
-    let commands = Object.values(functionDocs)
-        .reduce((obj, o) => { return { ...obj, ...require(pathLib.join(o.meta.path, o.meta.filename)) } }, {});
-    // For each exported function, enhance with functionDocs
-    for (let key in commands) {
-        if (!functionDocs[key]) {
-            delete commands[key]; // require() can introduce other undocumented exported variables, ignore those
-            continue;
-        }
-        let desc = (functionDocs[key].description || "").replace('\n', ' ');
-        if (desc.length > 120)
-            desc = desc.substring(0, 120) + '...'
-        commands[key] = {
-            name: key,
-            func: commands[key],
-            params: functionDocs[key].params,
-            description: desc
-        }
-    }
-    return commands;
+function optionName(paramName) {
+    const [root, ...rest] = paramName.split('.');
+    return OPTIONS_PARAMS.includes(root) && rest.length ? rest.join('.') : paramName;
 }
 
 /**
  * Creates the string to display as help message for a specific command.
  *
- * @param {object} command a command object as created by makeCommands
+ * @param {Command} command
  * @param {string[]} ignoreParams an array of parameter names to ignore for help texts
  * @param {boolean} [showParams=false] whether to display params in the help text or not
  * @returns {string} a help text
  */
 function helpString(command, ignoreParams, showParams = false) {
     let fill = showParams || command.name.length >= 24 ? '' : '.'.repeat(24 - command.name.length);
-    let s = `${chalk.blueBright(command.name.length >= 24 ? command.name.substring(0, 24) : command.name)}${fill}`;
+    let s = `${styleText('blueBright', command.name.length >= 24 ? command.name.substring(0, 24) : command.name)}${fill}`;
     if (showParams && command.params)
         s += " " + command.params
-            .filter(p => ignoreParams.indexOf(p.name) < 0)
+            .filter(p => !ignoreParams.includes(p.name))
             .map(p => {
-                let name = p.name.replace(/(opts|options)\./, '');
-                let type = p.defaultvalue === undefined ? p.type.names.join('|') : p.defaultvalue;
-                type = (type === 'string' || type === '*') ? "" : "=" + type;
+                let name = optionName(p.name);
+                let type = p.defaultValue === undefined ? p.type : p.defaultValue;
+                type = (!type || type === 'string' || type === '*') ? "" : "=" + type;
                 if (name !== p.name) {
                     return `--${name}${type}`
                 } else {
@@ -131,7 +105,7 @@ function helpString(command, ignoreParams, showParams = false) {
             .join(' ') + '\n\n';
 
     if (command.description)
-        s += ` ${command.description.replace(/ ?\n ?/, " ")}`;
+        s += ` ${command.description}`;
 
     s += '\n';
     return s;
@@ -143,22 +117,21 @@ function helpString(command, ignoreParams, showParams = false) {
  * @param {object} opts
  * @param {string} opts.cmdGroup
  * @param {string} opts.cmd
- * @param {object} opts.commands
+ * @param {Object<string, Object<string, Command>>} opts.commands
  * @param {object} opts.options
- * {cmd, cmdGroup, cmds, options}
  */
 function printHelp({ cmdGroup, cmd, commands, options }) {
     let out = "", search;
     // Remove opts and options for user, this is implied by option style args
-    let ignoreParams = Object.keys(options.internalArgs).concat(['opts', 'options']);
+    let ignoreParams = Object.keys(options.internalArgs || {}).concat(OPTIONS_PARAMS);
     if (!commands[cmdGroup] || !commands[cmdGroup][cmd]) { // Command doesn't exist or none was given
         if (search = (cmd || cmdGroup)) { // ... but we do have an (incorrect) command string
             // Search for command with closest levenshtein distance (closest string)
             let guesses = Object.keys(commands)
-                .reduce((prev, cur) => prev.concat(
-                    Object.keys(commands[cur]).map(el => [cur, el])), [])
-                .sort((a, b) => leven(a[1], search) - leven(b[1], search))
-            out += chalk.red(`Did you mean '${guesses[0][0]} ${guesses[0][1]}'?\n\n`);
+                .flatMap(group => Object.keys(commands[group]).map(name => [group, name]))
+                .sort((a, b) => distance(a[1], search) - distance(b[1], search))
+            if (guesses.length)
+                out += styleText('red', `Did you mean '${guesses[0][0]} ${guesses[0][1]}'?\n\n`);
         }
         out += `Usage: ${options.cliName}` + ' GROUP COMMAND [ARGUMENTS]\n\n';
         if (options.cliDescription)
@@ -200,7 +173,7 @@ function mergeDeep(target, source) {
         const targetValue = target[key];
         const sourceValue = source[key];
 
-        if (!target.hasOwnProperty(key)) {
+        if (!Object.hasOwn(target, key)) {
             console.log(`Skipping key ${key} not in`, target);
             return;  // Skip if source doesn't have key
         } else if (Array.isArray(targetValue) && Array.isArray(sourceValue)) {
@@ -217,66 +190,75 @@ function mergeDeep(target, source) {
 
 /**
  * Merges arguments from different sources in a particular order to form a final arguments object.
+ * Values from the command line (positional and options) are cast to their JSDoc types.
  *
- * @param {array} cmdParams
- * @param {array} [posArgs=[]]
+ * @param {Param[]} cmdParams
+ * @param {any[]} [posArgs=[]]
  * @param {object} [optArgs={}]
  * @param {object} [importArgs=undefined]
  * @param {object} [internalArgs={}]
- * @returns
+ * @returns {Object<string, any>} argument values keyed by root parameter name, in parameter order
+ * @throws {Error} if a command line value doesn't match its declared type
  */
 function mergeArgs(cmdParams, posArgs = [], optArgs = {}, importArgs = undefined, internalArgs = {}) {
-    // Filter out positional arguments and options not associated with a command
     // Create an object representing the arguments values. Note that since ES2015, order of keys are
     // chronological, meaning if we put them in at the right parameter order they will also come out in same order
-    let args = cmdParams ? cmdParams.reduce((obj, param) => { nestedProp.set(obj, param.name, undefined); return obj }, {}) : [];
-
-    // console.log("Args from start", args)
+    /** @type {Object<string, any>} */
+    let args = {};
+    for (const param of cmdParams || [])
+        setNested(args, param.name, undefined);
+    const typeOf = (/** @type {string} */ name) => cmdParams?.find(p => p.name === name)?.type;
 
     // First do imported args, e.g. from a JSON or similar
     if (importArgs) {
         args = mergeDeep(args, importArgs);
-        // console.log("Args after json", args)
     }
 
     // Set arg values from internalArgs, replacing anything imported
     for (let arg in internalArgs) {
         // Only sets root arguments, not nested
-        if (args.hasOwnProperty(arg))
+        if (Object.hasOwn(args, arg))
             args[arg] = internalArgs[arg]
     }
 
-    // console.log("Args after internal", args)
-
     // Set arg values from positional args in order, skipping already set args
-    if (posArgs.length) {
-        let entries = Object.entries(args);
-        for (let i = 0, j = 0; i < entries.length && j < posArgs.length; i++) {
-            if (entries[i][1] === undefined) {
-                entries[i][1] = posArgs[j];
-                j++;
-            }
-        }
-        args = entries.reduce((tempArgs, entry) => {
-            tempArgs[entry[0]] = entry[1];
-            return tempArgs;
-        }, {})
-        // console.log("Args after positional", args)
+    let j = 0;
+    for (const name of Object.keys(args)) {
+        if (j >= posArgs.length)
+            break;
+        if (args[name] === undefined)
+            args[name] = castValue(posArgs[j++], typeOf(name), name);
     }
 
     // Finally writes any argument options, e.g. --option=x, looking for match first in option/opts, otherwise root arguments
     for (let option in optArgs) {
-        if (args.opts && args.opts.hasOwnProperty(option)) {
-            args.opts[option] = optArgs[option];
-        } else if (args.options && args.options.hasOwnProperty(option)) {
-            args.options[option] = optArgs[option];
-        } else if (args.hasOwnProperty(option)) {
-            args[option] = optArgs[option];
+        const root = OPTIONS_PARAMS.find(p => args[p] && Object.hasOwn(args[p], option));
+        if (root) {
+            args[root][option] = castValue(optArgs[option], typeOf(`${root}.${option}`), option);
+        } else if (Object.hasOwn(args, option)) {
+            args[option] = castValue(optArgs[option], typeOf(option), option);
+        } else {
+            console.warn(styleText('yellow', `Ignoring unknown option --${option}`));
         }
     }
-    // console.log("Args after options", args)
 
     return args;
+}
+
+/**
+ * Options to minimist that keep values for string params as strings, so that e.g. `--id=0123`
+ * is not converted to the number 123. Other values are cast based on the JSDoc type.
+ *
+ * NOTE: Boolean params are deliberately not passed as minimist `boolean` options, as minimist
+ * would then set every boolean left off the command line to false, overriding function defaults.
+ *
+ * @param {Param[]} [params=[]]
+ * @returns {import('minimist').Opts}
+ */
+function argvOptions(params = []) {
+    return {
+        string: ['_', ...params.filter(p => isStringType(p.type)).map(p => optionName(p.name))],
+    };
 }
 
 /**
@@ -284,28 +266,25 @@ function mergeArgs(cmdParams, posArgs = [], optArgs = {}, importArgs = undefined
  * documented functions. Executes the command and options provided via the argv
  * array.
  *
- * @param {string[]} argv array of command options from `process.argv` 
+ * @param {string[]} argv array of command options from `process.argv`
  * @param {string|string[]|object} sourcePaths path(s) of source files to scan.
  * If an object, each key will denote a group of commands.
  * @param {object} [options={}] the options object
- * @param {string} options.cliName name of the CLI app to display when printing
+ * @param {string} [options.cliName] name of the CLI app to display when printing
  * help. Defaults to package.json values from calling module.
- * @param {string} options.cliDescription description of the CLI app to display
+ * @param {string} [options.cliDescription] description of the CLI app to display
  * when printing help. Defaults to package.json values from calling module.
- * @param {string} options.cliVersion version of the CLI app to display when
+ * @param {string} [options.cliVersion] version of the CLI app to display when
  * printing help. Defaults to package.json values from calling module.
- * @param {object} options.minimistOpts specific options to minimist that is
- * used to parse command arguments
- * @param {object} options.internalArgs function parameters that should not be
+ * @param {object} [options.internalArgs] function parameters that should not be
  * exposed in CLI commands but instead populated internally
  * @param {boolean} [options.parallelize=true] if given multiple commands (with
  * -j), run them in parallel
- * @returns {Promise<any[]>} resolving to an array of command return values
+ * @returns {Promise<any[]|undefined>} resolving to an array of command return values
  */
 async function autoCLI(argv, sourcePaths, options = {}) {
     // Find package.json of the script where main is run from, assuming autoCLI is used as a dependency to it
-    let callingPackagePath = pkgUp.sync({ cwd: require.main.filename }), callingPackage = {};
-    callingPackage = callingPackagePath ? require(callingPackagePath) : callingPackage;
+    const callingPackage = require.main ? findPackage(pathLib.dirname(require.main.filename)) : {};
 
     let script, cmdGroup, cmd;
     [, script, ...argv] = argv // Split argv into script name and arguments
@@ -314,9 +293,10 @@ async function autoCLI(argv, sourcePaths, options = {}) {
     options.cliVersion = options.cliVersion || callingPackage.version || "Unversioned";
     options.parallelize = options.parallelize === undefined ? true : options.parallelize;
 
-    let cmdArgs = minimist(argv, options.minimistOpts || {});
+    // First pass finds the command, second pass parses its arguments based on the command's params
+    let cmdArgs = minimist(argv, { string: ['_'] });
     let commands = {};
-    if (typeof sourcePaths === 'object') {
+    if (typeof sourcePaths === 'object' && !Array.isArray(sourcePaths)) {
         // Expect a command group before command
         cmdGroup = cmdArgs._.shift();
         cmd = cmdArgs._.shift();
@@ -333,11 +313,14 @@ async function autoCLI(argv, sourcePaths, options = {}) {
     } else if (cmdArgs.h || cmdArgs.help || !commands[cmdGroup] || !commands[cmdGroup][cmd]) {
         printHelp({ cmdGroup, cmd, commands, options });
     } else {
-        // TODO maybe re-parse argv as we can cast some options based on command param types
-        let importObj, importArgs = [undefined], results = [];
+        const command = commands[cmdGroup][cmd];
+        cmdArgs = minimist(argv, argvOptions(command.params));
+        cmdArgs._.splice(0, cmdGroup === "all" ? 1 : 2); // Remove group and command
+        let importObj, importArgs = [undefined];
 
         // Remove all properties that are not intended for the command
-        let { _, j, json, h, help, v, version, ...optArgs } = cmdArgs;
+        let { _, j, json } = cmdArgs;
+        const optArgs = Object.fromEntries(Object.entries(cmdArgs).filter(([key]) => !RESERVED_OPTIONS.includes(key)));
 
         if (importObj = (json || j)) {
             if (importObj.match(/\.json$/))
@@ -351,15 +334,16 @@ async function autoCLI(argv, sourcePaths, options = {}) {
                 importArgs[0] = importObj;
             }
         }
-        let mergedArgs = importArgs.map(a => mergeArgs(commands[cmdGroup][cmd].params, _, optArgs, a, options.internalArgs));
+        // Merging also validates all arguments, before any command runs
+        let mergedArgs = importArgs.map(a => mergeArgs(command.params, _, optArgs, a, options.internalArgs));
         let result;
         if (options.parallelize) {
-            result = await Promise.all(mergedArgs.map(args => commands[cmdGroup][cmd].func.apply(null, Object.values(args))));
+            result = await Promise.all(mergedArgs.map(args => command.func.apply(null, Object.values(args))));
         } else {
             result = [];
             for (let args of mergedArgs) {
                 try {
-                    result.push(await commands[cmdGroup][cmd].func.apply(null, Object.values(args)));
+                    result.push(await command.func.apply(null, Object.values(args)));
                 } catch (e)
                 {
                     result.push(e.toString());
@@ -374,4 +358,4 @@ async function autoCLI(argv, sourcePaths, options = {}) {
     }
 }
 
-module.exports = { autoCLI }
+module.exports = { autoCLI, makeCommands, mergeArgs, argvOptions };
